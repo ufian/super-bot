@@ -33,6 +33,15 @@ type Rtjc struct {
 	URClient *http.Client
 }
 
+type SummaryItem struct {
+	title   string
+	content string
+}
+
+func (s SummaryItem) summary() (title string) {
+	return s.title + "\n\n" + s.content
+}
+
 // submitter defines interface to submit (usually asynchronously) to the chat
 type submitter interface {
 	Submit(ctx context.Context, text string, pin bool) error
@@ -54,17 +63,19 @@ func (l Rtjc) Listen(ctx context.Context) {
 		if !strings.HasPrefix(msg, "⚠") {
 			return
 		}
-		title, txt, err := l.summary(msg)
+		items, err := l.getSummaryMessages(msg)
 		if err != nil {
 			log.Printf("[WARN] can't get summary, %v", err)
 			return
 		}
-		if txt == "" {
-			log.Printf("[WARN] empty summary for %q", msg)
-			return
-		}
-		if serr := l.Submitter.Submit(ctx, title+"\n\n"+txt, false); serr != nil {
-			log.Printf("[WARN] can't send summary, %v", serr)
+		for _, item := range items {
+			if item.content == "" {
+				log.Printf("[WARN] empty summary for %q", msg)
+				return
+			}
+			if serr := l.Submitter.Submit(ctx, item.summary(), false); serr != nil {
+				log.Printf("[WARN] can't send summary, %v", serr)
+			}
 		}
 	}
 
@@ -105,22 +116,33 @@ func (l Rtjc) isPinned(msg string) (ok bool, m string) {
 }
 
 // summary returns short summary of the selected news article
-func (l Rtjc) summary(msg string) (title, content string, err error) {
+func (l Rtjc) getSummaryMessages(msg string) (items []SummaryItem, err error) {
 	re := regexp.MustCompile(`https?://[^\s"'<>]+`)
 	link := re.FindString(msg)
 	if strings.Contains(link, "radio-t.com") {
-		return "", "", nil // ignore radio-t.com links
+		return []SummaryItem{}, nil // ignore radio-t.com links
 	}
+
+	item, err := l.getSummaryByLink(link)
+	if err != nil {
+		return []SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
+	}
+
+	items = append(items, item)
+	return items, nil
+}
+
+func (l Rtjc) getSummaryByLink(link string) (item SummaryItem, err error) {
 	log.Printf("[DEBUG] summary for link:%s", link)
 
 	rl := fmt.Sprintf("%s?token=%s&url=%s", l.UrAPI, l.UrToken, link)
 	resp, err := l.URClient.Get(rl)
 	if err != nil {
-		return "", "", fmt.Errorf("can't get summary for %s: %w", link, err)
+		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
 	}
 	defer resp.Body.Close() // nolint
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("can't get summary for %s: %d", link, resp.StatusCode)
+		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %d", link, resp.StatusCode)
 	}
 
 	urResp := struct {
@@ -128,13 +150,16 @@ func (l Rtjc) summary(msg string) (title, content string, err error) {
 		Content string `json:"content"`
 	}{}
 	if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
-		return "", "", fmt.Errorf("can't decode summary for %s: %w", link, decErr)
+		return SummaryItem{}, fmt.Errorf("can't decode summary for %s: %w", link, decErr)
 	}
 
 	res, err := l.OpenAISummary.Summary(urResp.Title + " - " + urResp.Content)
 	if err != nil {
-		return "", "", fmt.Errorf("can't get summary for %s: %w", link, err)
+		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
 	}
 
-	return urResp.Title, res, nil
+	return SummaryItem{
+		title:   urResp.Title,
+		content: res,
+	}, nil
 }
