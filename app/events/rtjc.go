@@ -120,7 +120,8 @@ func (l Rtjc) getSummaryMessages(msg string) (items []SummaryItem, err error) {
 	re := regexp.MustCompile(`https?://[^\s"'<>]+`)
 	link := re.FindString(msg)
 	if strings.Contains(link, "radio-t.com") {
-		return []SummaryItem{}, nil // ignore radio-t.com links
+		return l.getSummaryMessagesFromComments(link)
+		//return []SummaryItem{}, nil // ignore radio-t.com links
 	}
 
 	item, err := l.getSummaryByLink(link)
@@ -162,4 +163,66 @@ func (l Rtjc) getSummaryByLink(link string) (item SummaryItem, err error) {
 		title:   urResp.Title,
 		content: res,
 	}, nil
+}
+
+func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (items []SummaryItem, err error) {
+	re := regexp.MustCompile(`https?://radio-t.com/p/[^\s"'<>]/prep-[0-9]+/`)
+	if !re.MatchString(remarkLink) {
+		return []SummaryItem{}, nil // ignore radio-t.com links
+	}
+
+	rl := fmt.Sprintf("https://remark42.radio-t.com/api/v1/find?site=radiot&url=%s&sort-score&format=plain", remarkLink)
+	resp, err := l.URClient.Get(rl)
+	if err != nil {
+		return []SummaryItem{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
+	}
+	defer resp.Body.Close() // nolint
+	if resp.StatusCode != http.StatusOK {
+		return []SummaryItem{}, fmt.Errorf("can't get comments for %s: %d", remarkLink, resp.StatusCode)
+	}
+
+	urResp := struct {
+		Comments []struct {
+			ID       string `json:"id" bson:"_id"`
+			ParentID string `json:"pid"`
+			Text     string `json:"text"`
+			Orig     string `json:"orig,omitempty"` // important: never render this as HTML! It's not sanitized.
+			User     struct {
+				Name     string `json:"name"`
+				Admin    bool   `json:"admin"`
+				Verified bool   `json:"verified,omitempty"`
+				PaidSub  bool   `json:"paid_sub,omitempty"`
+			} `json:"user"`
+			Score       int       `json:"score"`
+			Vote        int       `json:"vote"` // vote for the current user, -1/1/0.
+			Controversy float64   `json:"controversy,omitempty"`
+			Timestamp   time.Time `json:"time" bson:"time"`
+			Pin         bool      `json:"pin,omitempty" bson:"pin,omitempty"`
+			Deleted     bool      `json:"delete,omitempty" bson:"delete"`
+			Imported    bool      `json:"imported,omitempty" bson:"imported"`
+			PostTitle   string    `json:"title,omitempty" bson:"title"`
+		} `json:"comments"`
+	}{}
+
+	if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
+		return []SummaryItem{}, fmt.Errorf("can't decode comments for %s: %w", remarkLink, decErr)
+	}
+
+	re2 := regexp.MustCompile(`https?://[^\s"'<>]+`)
+	for _, c := range urResp.Comments {
+		link := re2.FindString(c.Text)
+		if strings.Contains(link, "radio-t.com") {
+			continue
+		}
+
+		item, err := l.getSummaryByLink(link)
+		if err != nil {
+			log.Printf("[WARN] can't get summary for %s: %v", link, err)
+			continue
+		}
+
+		items = append(items, item)
+	}
+
+	return items, nil
 }
