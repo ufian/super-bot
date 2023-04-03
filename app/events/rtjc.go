@@ -17,7 +17,7 @@ import (
 )
 
 //go:generate moq --out mocks/submitter.go --pkg mocks --skip-ensure . submitter:Submitter
-//go:generate moq --out mocks/openai_summary.go --pkg mocks --skip-ensure . openAISummary:OpenAISummary
+//go:generate moq --out mocks/openai_summary.go --pkg mocks --skip-ensure . OpenAISummary:OpenAISummary
 
 // pinned defines translation map for messages pinned by bot
 var pinned = map[string]string{
@@ -27,31 +27,21 @@ var pinned = map[string]string{
 // Rtjc is a listener for incoming rtjc commands. Publishes whatever it got from the socket
 // compatible with the legacy rtjc bot. Primarily use case is to push news events from news.radio-t.com
 type Rtjc struct {
-	Port          int
-	Submitter     submitter
-	OpenAISummary openAISummary
+	Port      int
+	Submitter submitter
 
-	UrAPI    string
-	UrToken  string
-	URClient *http.Client
-}
-
-type SummaryItem struct {
-	title   string
-	content string
-}
-
-func (s SummaryItem) summary() (title string) {
-	return s.title + "\n\n" + bot.EscapeMarkDownV1Text(s.content)
+	Summarizer   summarizer
+	RemarkClient *http.Client
 }
 
 // submitter defines interface to submit (usually asynchronously) to the chat
 type submitter interface {
 	Submit(ctx context.Context, text string, pin bool) error
+	SubmitHTML(ctx context.Context, text string, pin bool) error
 }
 
-type openAISummary interface {
-	Summary(text string) (response string, err error)
+type summarizer interface {
+	Summary(link string) (string, error)
 }
 
 // SUMPREFIX Темы слушателей 852 - https://radio-t.com/p/2023/03/28/prep-852/
@@ -65,20 +55,20 @@ func (l Rtjc) Listen(ctx context.Context) {
 	}
 
 	sendSummary := func(msg string) {
-		if !strings.HasPrefix(msg, "⚠") && !strings.HasPrefix(msg, "SUMPREFIX") {
+		if !strings.HasPrefix(msg, "⚠") {
 			return
 		}
-		items, err := l.getSummaryMessages(msg)
+		sendMessages, err := l.getSummaryMessages(msg)
 		if err != nil {
 			log.Printf("[WARN] can't get summary, %v", err)
 			return
 		}
-		for _, item := range items {
-			if item.content == "" {
-				log.Printf("[WARN] empty summary for %q", msg)
+		for i, sendMsg := range sendMessages {
+			if sendMsg == "" {
+				log.Printf("[WARN] empty summary item #%d for %q", i, msg)
 				return
 			}
-			if serr := l.Submitter.Submit(ctx, item.summary(), false); serr != nil {
+			if serr := l.Submitter.SubmitHTML(ctx, sendMsg, false); serr != nil {
 				log.Printf("[WARN] can't send summary, %v", serr)
 			}
 		}
@@ -121,7 +111,7 @@ func (l Rtjc) isPinned(msg string) (ok bool, m string) {
 }
 
 // summary returns short summary of the selected news article
-func (l Rtjc) getSummaryMessages(msg string) (items []SummaryItem, err error) {
+func (l Rtjc) getSummaryMessages(msg string) (messages []string, err error) {
 	log.Printf("[DEBUG] summary for message: %s", msg)
 
 	re := regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -129,52 +119,19 @@ func (l Rtjc) getSummaryMessages(msg string) (items []SummaryItem, err error) {
 	log.Printf("[DEBUG] Link found: %s", link)
 	if strings.Contains(link, "radio-t.com") {
 		return l.getSummaryMessagesFromComments(link)
-		//return []SummaryItem{}, nil // ignore radio-t.com links
 	}
 
-	item, err := l.getSummaryByLink(link)
+	message, err := l.Summarizer.Summary(link)
 	if err != nil {
-		return []SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
+		return []string{}, fmt.Errorf("can't get summary for %s: %w", link, err)
 	}
 
-	items = append(items, item)
-	return items, nil
+	messages = append(messages, message)
+	return messages, nil
 }
 
-func (l Rtjc) getSummaryByLink(link string) (item SummaryItem, err error) {
-	log.Printf("[DEBUG] summary for link:%s", link)
-
-	rl := fmt.Sprintf("%s?token=%s&url=%s", l.UrAPI, l.UrToken, link)
-	resp, err := l.URClient.Get(rl)
-	if err != nil {
-		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
-	}
-	defer resp.Body.Close() // nolint
-	if resp.StatusCode != http.StatusOK {
-		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %d", link, resp.StatusCode)
-	}
-
-	urResp := struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-	}{}
-	if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
-		return SummaryItem{}, fmt.Errorf("can't decode summary for %s: %w", link, decErr)
-	}
-
-	res, err := l.OpenAISummary.Summary(urResp.Title + " - " + urResp.Content)
-	if err != nil {
-		return SummaryItem{}, fmt.Errorf("can't get summary for %s: %w", link, err)
-	}
-
-	return SummaryItem{
-		title:   urResp.Title,
-		content: res,
-	}, nil
-}
-
-func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (items []SummaryItem, err error) {
-	type Comment struct {
+func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages []string, err error) {
+	type RemarkComment struct {
 		ParentID string `json:"pid"`
 		Text     string `json:"text"`
 		Orig     string `json:"orig,omitempty"` // important: never render this as HTML! It's not sanitized.
@@ -189,23 +146,27 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (items []Summary
 		Timestamp time.Time `json:"time" bson:"time"`
 	}
 
-	loadTopComments := func(remarkLink string) (comments []Comment, err error) {
+	renderRemarkComment := func(comment RemarkComment) string {
+		return fmt.Sprintf("*%+d* от *%s*\n%s", comment.Score, bot.EscapeMarkDownV1Text(comment.User.Name), bot.EscapeMarkDownV1Text(comment.Text))
+	}
+
+	loadTopComments := func(remarkLink string) (comments []RemarkComment, err error) {
 		rl := fmt.Sprintf("https://remark42.radio-t.com/api/v1/find?site=radiot&url=%s&sort-score&format=plain", remarkLink)
-		resp, err := l.URClient.Get(rl)
+		resp, err := l.RemarkClient.Get(rl)
 		if err != nil {
-			return []Comment{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
+			return []RemarkComment{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
 		}
 		defer resp.Body.Close() // nolint
 		if resp.StatusCode != http.StatusOK {
-			return []Comment{}, fmt.Errorf("can't get comments for %s: %d", remarkLink, resp.StatusCode)
+			return []RemarkComment{}, fmt.Errorf("can't get comments for %s: %d", remarkLink, resp.StatusCode)
 		}
 
 		urResp := struct {
-			Comments []Comment `json:"comments"`
+			Comments []RemarkComment `json:"comments"`
 		}{}
 
 		if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
-			return []Comment{}, fmt.Errorf("can't decode comments for %s: %w", remarkLink, decErr)
+			return []RemarkComment{}, fmt.Errorf("can't decode comments for %s: %w", remarkLink, decErr)
 		}
 
 		for _, c := range urResp.Comments {
@@ -233,12 +194,12 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (items []Summary
 
 	re := regexp.MustCompile(`https?://radio-t.com/p/[^\s"'<>]+/prep-[0-9]+/`)
 	if !re.MatchString(remarkLink) {
-		return []SummaryItem{}, fmt.Errorf("radio-t link doesn't fit to format: %s", remarkLink) // ignore radio-t.com links
+		return []string{}, fmt.Errorf("radio-t link doesn't fit to format: %s", remarkLink) // ignore radio-t.com links
 	}
 
 	comments, err := loadTopComments(remarkLink)
 	if err != nil {
-		return []SummaryItem{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
+		return []string{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
 	}
 
 	reLink := regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -246,24 +207,19 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (items []Summary
 		link := reLink.FindString(c.Text)
 
 		if link == "" || strings.Contains(link, "radio-t.com") {
-			item := SummaryItem{
-				title:   fmt.Sprintf("*+%d* от *%s*", c.Score, bot.EscapeMarkDownV1Text(c.User.Name)),
-				content: bot.EscapeMarkDownV1Text(c.Orig),
-			}
-			items = append(items, item)
+			messages = append(messages, renderRemarkComment(c))
 			continue
 		}
 
-		item, err := l.getSummaryByLink(link)
+		summary, err := l.Summarizer.Summary(link)
 		if err != nil {
 			log.Printf("[WARN] can't get summary for %s: %v", link, err)
 			continue
 		}
 
-		item.title = fmt.Sprintf("*+%d* от *%s*\n_%s_\n\n%s", c.Score, bot.EscapeMarkDownV1Text(c.User.Name), bot.EscapeMarkDownV1Text(c.Orig), bot.EscapeMarkDownV1Text(item.title))
-
-		items = append(items, item)
+		message := fmt.Sprintf("%s\n\n%s", renderRemarkComment(c), summary)
+		messages = append(messages, message)
 	}
 
-	return items, nil
+	return messages, nil
 }
