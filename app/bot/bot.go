@@ -41,6 +41,7 @@ type Response struct {
 	User        User          // user to ban
 	ChannelID   int64         // channel to ban, if set then User and BanInterval are ignored
 	ReplyTo     int           // message to reply to, if 0 then no reply but common message
+	ParseMode   string        // parse mode for message in Telegram (we use Markdown by default)
 }
 
 // HTTPClient wrap http.Client to allow mocking

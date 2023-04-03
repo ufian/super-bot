@@ -163,13 +163,19 @@ func main() {
 		SuperUsers:             opts.SuperUsers,
 	}
 
+	summarizer := bot.NewSummarizer(
+		openAIBot,
+		opts.UreadabilityAPI,
+		opts.UreadabilityToken,
+		httpClient,
+		opts.Dbg,
+	)
+
 	rtjc := events.Rtjc{
-		Port:          opts.RtjcPort,
-		Submitter:     &tgListener,
-		UrAPI:         opts.UreadabilityAPI,
-		UrToken:       opts.UreadabilityToken,
-		URClient:      httpClient,
-		OpenAISummary: openAIBot,
+		Port:         opts.RtjcPort,
+		Submitter:    &tgListener,
+		Summarizer:   summarizer,
+		RemarkClient: httpClient,
 	}
 	go rtjc.Listen(ctx)
 
