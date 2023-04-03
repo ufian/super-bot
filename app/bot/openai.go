@@ -43,7 +43,10 @@ type OpenAI struct {
 	lastDT time.Time
 }
 
-var maxMsgLen = 14000
+// The API supports 4097 tokens ~16000 characters (<=4 per token) for request + result together
+// The response is limited to 1000 tokens and OpenAI always reserved it for the result
+// So the max length of the request is 3000 tokens ~12000 characters
+var maxMsgLen = 12000
 
 // NewOpenAI makes a bot for ChatGPT
 // MaxTokens is hard limit for the number of tokens in the response

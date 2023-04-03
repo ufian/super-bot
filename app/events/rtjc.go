@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/radio-t/super-bot/app/bot"
+	"github.com/go-pkgz/notify"
+	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 //go:generate moq --out mocks/submitter.go --pkg mocks --skip-ensure . submitter:Submitter
@@ -147,7 +148,9 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages []stri
 	}
 
 	renderRemarkComment := func(comment RemarkComment) string {
-		return fmt.Sprintf("*%+d* от *%s*\n%s", comment.Score, bot.EscapeMarkDownV1Text(comment.User.Name), bot.EscapeMarkDownV1Text(comment.Text))
+		user := tbapi.EscapeText(tbapi.ModeHTML, comment.User.Name)
+		text := notify.TelegramSupportedHTML(comment.Text)
+		return fmt.Sprintf("<b>%+d</b> от <b>%s</b>\n<i>%s</i>", comment.Score, user, text)
 	}
 
 	loadTopComments := func(remarkLink string) (comments []RemarkComment, err error) {
@@ -214,7 +217,7 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages []stri
 		summary, err := l.Summarizer.Summary(link)
 		if err != nil {
 			log.Printf("[WARN] can't get summary for %s: %v", link, err)
-			continue
+			summary = fmt.Sprintf("<code>Error: %v</code>", err)
 		}
 
 		message := fmt.Sprintf("%s\n\n%s", renderRemarkComment(c), summary)

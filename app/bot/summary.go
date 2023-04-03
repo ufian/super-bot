@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // Summarizer is a helper for summarizing articles by links
@@ -110,8 +112,10 @@ type summaryItem struct {
 }
 
 // Render telegram message
-func (s summaryItem) Render() (title string) {
-	return s.Title + "\n\n" + EscapeMarkDownV1Text(s.Content)
+func (s summaryItem) Render() string {
+	title := tbapi.EscapeText(tbapi.ModeHTML, s.Title)
+	content := tbapi.EscapeText(tbapi.ModeHTML, s.Content)
+	return fmt.Sprintf("<b>%s</b>\n\n%s", title, content)
 }
 
 func (s summaryItem) IsEmpty() bool {

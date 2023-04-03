@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-pkgz/notify"
 	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/radio-t/super-bot/app/bot"
@@ -292,12 +293,14 @@ func (l *TelegramListener) Submit(ctx context.Context, text string, pin bool) er
 
 // SubmitHTML message to telegram's group with HTML mode
 func (l *TelegramListener) SubmitHTML(ctx context.Context, text string, pin bool) error {
+	// Remove unsupported HTML tags
+	text = notify.TelegramSupportedHTML(text)
 	l.msgs.once.Do(func() { l.msgs.ch = make(chan bot.Response, 100) })
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case l.msgs.ch <- bot.Response{Text: text, Pin: pin, Send: true, ParseMode: tbapi.ModeHTML, Preview: true}:
+	case l.msgs.ch <- bot.Response{Text: text, Pin: pin, Send: true, ParseMode: tbapi.ModeHTML, Preview: false}:
 	}
 	return nil
 }
