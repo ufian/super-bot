@@ -305,6 +305,15 @@ func (l *TelegramListener) SubmitHTML(ctx context.Context, text string, pin bool
 	return nil
 }
 
+// WaitMessageQueue is waiting, while queue of sending isn't empty.
+// This needs to fit Telegram's limits (20 messages per minute)
+func (l *TelegramListener) WaitMessageQueue() error {
+	for len(l.msgs.ch) != 0 {
+		time.Sleep(time.Second)
+	}
+	return nil
+}
+
 func (l *TelegramListener) getChatID(group string) (int64, error) {
 	chatID, err := strconv.ParseInt(l.Group, 10, 64)
 	if err == nil {

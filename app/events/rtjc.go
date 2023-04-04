@@ -39,6 +39,7 @@ type Rtjc struct {
 type submitter interface {
 	Submit(ctx context.Context, text string, pin bool) error
 	SubmitHTML(ctx context.Context, text string, pin bool) error
+	WaitMessageQueue() error
 }
 
 type summarizer interface {
@@ -65,6 +66,10 @@ func (l Rtjc) Listen(ctx context.Context) {
 			return
 		}
 		for i, sendMsg := range sendMessages {
+			if i%15 == 14 {
+				_ = l.Submitter.WaitMessageQueue()
+				time.Sleep(60 * time.Second)
+			}
 			if sendMsg == "" {
 				log.Printf("[WARN] empty summary item #%d for %q", i, msg)
 				return
