@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -88,9 +89,15 @@ func (s Summarizer) summaryInternal(link string) (item summaryItem, err error) {
 	urResp := struct {
 		Title   string `json:"Title"`
 		Content string `json:"Content"`
+		Type    string `json:"type"`
 	}{}
 	if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
 		return summaryItem{}, fmt.Errorf("can't decode summary for %s: %w", link, decErr)
+	}
+
+	// if content type is not text, we can't summarize it
+	if !strings.Contains(urResp.Type, "text") {
+		return summaryItem{}, fmt.Errorf("bad content type %s: %s", link, urResp.Type)
 	}
 
 	res, err := s.OpenAISummary.Summary(urResp.Title + " - " + urResp.Content)
