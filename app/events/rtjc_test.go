@@ -87,7 +87,11 @@ func TestRtjc_getSummaryMessages(t *testing.T) {
 	rtjc := Rtjc{Summarizer: summary, RemarkClient: ts.Client()}
 
 	{
-		messages, err := rtjc.getSummaryMessages("some message blah https://example.com")
+		ch, err := rtjc.getSummaryMessages("some message blah https://example.com")
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(messages))
 		assert.Equal(t, "some Title\n\nai summary", messages[0])
