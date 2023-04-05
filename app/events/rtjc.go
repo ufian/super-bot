@@ -220,7 +220,7 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan
 		defer close(ch)
 
 		reLink := regexp.MustCompile(`https?://[^\s"'<>]+`)
-		for _, c := range comments {
+		for i, c := range comments {
 			link := reLink.FindString(c.Text)
 
 			if link == "" || strings.Contains(link, "radio-t.com") {
@@ -234,7 +234,8 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan
 				summary = fmt.Sprintf("<code>Error: %v</code>", err)
 			}
 
-			message := fmt.Sprintf("%s\n\n%s", renderRemarkComment(c), summary)
+			prefix := fmt.Sprintf("[%d/%d] ", i+1, len(comments))
+			message := fmt.Sprintf("%s%s\n\n%s", prefix, renderRemarkComment(c), summary)
 			ch <- message
 		}
 	}

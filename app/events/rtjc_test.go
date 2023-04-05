@@ -79,7 +79,7 @@ func TestRtjc_getSummaryMessages(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "token123", r.URL.Query().Get("token"))
-		_, err := w.Write([]byte(`{"Content": "some Content", "Title": "some Title"}`))
+		_, err := w.Write([]byte(`{"Content": "some Content", "Title": "some Title", "Type": "text/html"}`))
 		require.NoError(t, err)
 	}))
 
@@ -94,7 +94,7 @@ func TestRtjc_getSummaryMessages(t *testing.T) {
 		}
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(messages))
-		assert.Equal(t, "some Title\n\nai summary", messages[0])
+		assert.Equal(t, "<b>some Title</b>\n\nai summary", messages[0])
 		assert.Equal(t, "some Title - some Content", oai.SummaryCalls()[0].Text)
 	}
 
