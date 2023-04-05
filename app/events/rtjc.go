@@ -46,8 +46,6 @@ type summarizer interface {
 	Summary(link string) (string, error)
 }
 
-// SUMPREFIX Темы слушателей 852 - https://radio-t.com/p/2023/03/28/prep-852/
-
 // Listen on Port accept and forward to telegram
 func (l Rtjc) Listen(ctx context.Context) {
 	log.Printf("[INFO] rtjc listener on port %d", l.Port)
@@ -65,8 +63,10 @@ func (l Rtjc) Listen(ctx context.Context) {
 			log.Printf("[WARN] can't get summary, %v", err)
 			return
 		}
-		for i, sendMsg := range sendMessages {
-			if i%15 == 14 {
+		i := 0
+		for sendMsg := range sendMessages {
+			i++
+			if i%15 == 0 {
 				_ = l.Submitter.WaitMessageQueue()
 				time.Sleep(60 * time.Second)
 			}
@@ -117,7 +117,7 @@ func (l Rtjc) isPinned(msg string) (ok bool, m string) {
 }
 
 // summary returns short summary of the selected news article
-func (l Rtjc) getSummaryMessages(msg string) (messages []string, err error) {
+func (l Rtjc) getSummaryMessages(msg string) (messages <-chan string, err error) {
 	log.Printf("[DEBUG] summary for message: %s", msg)
 
 	re := regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -127,16 +127,19 @@ func (l Rtjc) getSummaryMessages(msg string) (messages []string, err error) {
 		return l.getSummaryMessagesFromComments(link)
 	}
 
+	ch := make(chan string, 10)
+	defer close(ch)
+
 	message, err := l.Summarizer.Summary(link)
 	if err != nil {
-		return []string{}, fmt.Errorf("can't get summary for %s: %w", link, err)
+		return ch, fmt.Errorf("can't get summary for %s: %w", link, err)
 	}
 
-	messages = append(messages, message)
-	return messages, nil
+	ch <- message
+	return ch, nil
 }
 
-func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages []string, err error) {
+func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan string, err error) {
 	type RemarkComment struct {
 		ParentID string `json:"pid"`
 		Text     string `json:"text"`
@@ -200,34 +203,42 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages []stri
 
 	log.Printf("[DEBUG] summary for Radio-t link: %s", remarkLink)
 
+	ch := make(chan string, 10)
+
 	re := regexp.MustCompile(`https?://radio-t.com/p/[^\s"'<>]+/prep-[0-9]+/`)
 	if !re.MatchString(remarkLink) {
-		return []string{}, fmt.Errorf("radio-t link doesn't fit to format: %s", remarkLink) // ignore radio-t.com links
+		defer close(ch)
+		return ch, fmt.Errorf("radio-t link doesn't fit to format: %s", remarkLink) // ignore radio-t.com links
 	}
 
 	comments, err := loadTopComments(remarkLink)
 	if err != nil {
-		return []string{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
+		defer close(ch)
+		return ch, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
 	}
+	prepareComments := func() {
+		defer close(ch)
 
-	reLink := regexp.MustCompile(`https?://[^\s"'<>]+`)
-	for _, c := range comments {
-		link := reLink.FindString(c.Text)
+		reLink := regexp.MustCompile(`https?://[^\s"'<>]+`)
+		for _, c := range comments {
+			link := reLink.FindString(c.Text)
 
-		if link == "" || strings.Contains(link, "radio-t.com") {
-			messages = append(messages, renderRemarkComment(c))
-			continue
+			if link == "" || strings.Contains(link, "radio-t.com") {
+				ch <- renderRemarkComment(c)
+				continue
+			}
+
+			summary, err := l.Summarizer.Summary(link)
+			if err != nil {
+				log.Printf("[WARN] can't get summary for %s: %v", link, err)
+				summary = fmt.Sprintf("<code>Error: %v</code>", err)
+			}
+
+			message := fmt.Sprintf("%s\n\n%s", renderRemarkComment(c), summary)
+			ch <- message
 		}
-
-		summary, err := l.Summarizer.Summary(link)
-		if err != nil {
-			log.Printf("[WARN] can't get summary for %s: %v", link, err)
-			summary = fmt.Sprintf("<code>Error: %v</code>", err)
-		}
-
-		message := fmt.Sprintf("%s\n\n%s", renderRemarkComment(c), summary)
-		messages = append(messages, message)
 	}
+	go prepareComments()
 
-	return messages, nil
+	return ch, nil
 }
