@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	tokenizer "github.com/sandwich-go/gpt3-encoder"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -263,9 +264,32 @@ func (o *OpenAI) chatGPTRequestInternal(messages []openai.ChatCompletionMessage)
 	return resp.Choices[0].Message.Content, nil
 }
 
+func cutText(text string) (result string, err error) {
+	encoder, err := tokenizer.NewEncoder()
+	if err != nil {
+		return "", err
+	}
+
+	tokens, err := encoder.Encode(text)
+	if err != nil {
+		return "", err
+	}
+
+	if len(tokens) < 3000 {
+		return text, nil
+	}
+
+	return encoder.Decode(tokens[:3000]), nil
+}
+
 // Summary returns summary of the text
 func (o *OpenAI) Summary(text string) (response string, err error) {
-	return o.chatGPTRequest(text, "", "Make a short summary, up to 50 words, followed by a list of bullet points. Each bullet point is limited to 50 words, up to 7 in total. All in markdown format and translated to russian:\n")
+	request, err := cutText(text)
+	if err != nil {
+		request = text[:maxMsgLen]
+	}
+
+	return o.chatGPTRequest(request, "", "Make a short summary, up to 50 words, followed by a list of bullet points. Each bullet point is limited to 50 words, up to 7 in total. All in markdown format and translated to russian:\n")
 }
 
 // ReactOn keys

@@ -11,6 +11,10 @@ github.com/davecgh/go-spew/spew
 # github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f
 ## explicit
 github.com/dgryski/go-rendezvous
+# github.com/dlclark/regexp2 v1.7.0
+## explicit; go 1.13
+github.com/dlclark/regexp2
+github.com/dlclark/regexp2/syntax
 # github.com/go-pkgz/email v0.3.1-0.20221002173339-19d25a20d99c
 ## explicit; go 1.17
 github.com/go-pkgz/email
@@ -79,6 +83,12 @@ github.com/microcosm-cc/bluemonday/css
 # github.com/pmezard/go-difflib v1.0.0
 ## explicit
 github.com/pmezard/go-difflib/difflib
+# github.com/samber/lo v1.37.0
+## explicit; go 1.18
+github.com/samber/lo
+# github.com/sandwich-go/gpt3-encoder v0.0.0-20230203030618-cd99729dd0dd
+## explicit; go 1.18
+github.com/sandwich-go/gpt3-encoder
 # github.com/sashabaranov/go-openai v1.5.0
 ## explicit; go 1.18
 github.com/sashabaranov/go-openai
@@ -97,6 +107,9 @@ github.com/stretchr/objx
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/mock
 github.com/stretchr/testify/require
+# golang.org/x/exp v0.0.0-20220303212507-bbda1eaf7a17
+## explicit; go 1.18
+golang.org/x/exp/constraints
 # golang.org/x/net v0.0.0-20220826154423-83b083e8dc8b
 ## explicit; go 1.17
 golang.org/x/net/html
