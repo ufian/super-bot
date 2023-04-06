@@ -84,7 +84,10 @@ func TestRtjc_getSummaryMessages(t *testing.T) {
 	}))
 
 	summary := bot.NewSummarizer(oai, ts.URL, "token123", ts.Client(), false)
-	rtjc := Rtjc{Summarizer: summary, RemarkClient: ts.Client()}
+	remarkClient := bot.RemarkClient{
+		HTTPClient: ts.Client(),
+	}
+	rtjc := Rtjc{Summarizer: summary, RemarkClient: remarkClient}
 
 	{
 		ch, err := rtjc.getSummaryMessages("some message blah https://example.com")

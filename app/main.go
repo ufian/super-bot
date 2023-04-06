@@ -171,11 +171,15 @@ func main() {
 		opts.Dbg,
 	)
 
+	remarkClient := bot.RemarkClient{
+		HTTPClient: httpClient,
+	}
+
 	rtjc := events.Rtjc{
 		Port:         opts.RtjcPort,
 		Submitter:    &tgListener,
 		Summarizer:   summarizer,
-		RemarkClient: httpClient,
+		RemarkClient: remarkClient,
 	}
 	go rtjc.Listen(ctx)
 

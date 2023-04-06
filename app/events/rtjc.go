@@ -3,18 +3,14 @@ package events
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/go-pkgz/notify"
-	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/radio-t/super-bot/app/bot"
 )
 
 //go:generate moq --out mocks/submitter.go --pkg mocks --skip-ensure . submitter:Submitter
@@ -32,7 +28,7 @@ type Rtjc struct {
 	Submitter submitter
 
 	Summarizer   summarizer
-	RemarkClient *http.Client
+	RemarkClient bot.RemarkClient
 }
 
 // submitter defines interface to submit (usually asynchronously) to the chat
@@ -140,67 +136,6 @@ func (l Rtjc) getSummaryMessages(msg string) (messages <-chan string, err error)
 }
 
 func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan string, err error) {
-	type RemarkComment struct {
-		ParentID string `json:"pid"`
-		Text     string `json:"text"`
-		Orig     string `json:"orig,omitempty"` // important: never render this as HTML! It's not sanitized.
-		User     struct {
-			Name     string `json:"name"`
-			Admin    bool   `json:"admin"`
-			Verified bool   `json:"verified,omitempty"`
-			PaidSub  bool   `json:"paid_sub,omitempty"`
-		} `json:"user"`
-		Score     int       `json:"score"`
-		Deleted   bool      `json:"delete,omitempty" bson:"delete"`
-		Timestamp time.Time `json:"time" bson:"time"`
-	}
-
-	renderRemarkComment := func(comment RemarkComment) string {
-		user := tbapi.EscapeText(tbapi.ModeHTML, comment.User.Name)
-		text := notify.TelegramSupportedHTML(comment.Text)
-		return fmt.Sprintf("<b>%+d</b> от <b>%s</b>\n<i>%s</i>", comment.Score, user, text)
-	}
-
-	loadTopComments := func(remarkLink string) (comments []RemarkComment, err error) {
-		rl := fmt.Sprintf("https://remark42.radio-t.com/api/v1/find?site=radiot&url=%s&sort-score&format=plain", remarkLink)
-		resp, err := l.RemarkClient.Get(rl)
-		if err != nil {
-			return []RemarkComment{}, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
-		}
-		defer resp.Body.Close() // nolint
-		if resp.StatusCode != http.StatusOK {
-			return []RemarkComment{}, fmt.Errorf("can't get comments for %s: %d", remarkLink, resp.StatusCode)
-		}
-
-		urResp := struct {
-			Comments []RemarkComment `json:"comments"`
-		}{}
-
-		if decErr := json.NewDecoder(resp.Body).Decode(&urResp); decErr != nil {
-			return []RemarkComment{}, fmt.Errorf("can't decode comments for %s: %w", remarkLink, decErr)
-		}
-
-		for _, c := range urResp.Comments {
-			if c.ParentID != "" || c.Deleted || c.Score < 0 {
-				continue
-			}
-
-			comments = append(comments, c)
-		}
-		sort.Slice(comments, func(i, j int) bool {
-			if comments[i].Score < comments[j].Score {
-				return false
-			}
-
-			if comments[i].Score > comments[j].Score {
-				return true
-			}
-			// Equal case
-			return comments[i].Timestamp.Before(comments[j].Timestamp)
-		})
-		return comments, nil
-	}
-
 	log.Printf("[DEBUG] summary for Radio-t link: %s", remarkLink)
 
 	ch := make(chan string, 10)
@@ -211,20 +146,19 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan
 		return ch, fmt.Errorf("radio-t link doesn't fit to format: %s", remarkLink) // ignore radio-t.com links
 	}
 
-	comments, err := loadTopComments(remarkLink)
+	comments, err := l.RemarkClient.GetTopComments(remarkLink)
 	if err != nil {
 		defer close(ch)
 		return ch, fmt.Errorf("can't get comments for %s: %w", remarkLink, err)
 	}
+
 	prepareComments := func() {
 		defer close(ch)
 
-		reLink := regexp.MustCompile(`https?://[^\s"'<>]+`)
 		for i, c := range comments {
-			link := reLink.FindString(c.Text)
-
-			if link == "" || strings.Contains(link, "radio-t.com") {
-				ch <- renderRemarkComment(c)
+			link := c.GetLink()
+			if link == "" {
+				ch <- c.Render()
 				continue
 			}
 
@@ -235,7 +169,7 @@ func (l Rtjc) getSummaryMessagesFromComments(remarkLink string) (messages <-chan
 			}
 
 			prefix := fmt.Sprintf("[%d/%d] ", i+1, len(comments))
-			message := fmt.Sprintf("%s%s\n\n%s", prefix, renderRemarkComment(c), summary)
+			message := fmt.Sprintf("%s%s\n\n%s", prefix, c.Render(), summary)
 			ch <- message
 		}
 	}
