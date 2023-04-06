@@ -1,9 +1,10 @@
-package bot
+package openai
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/radio-t/super-bot/app/bot"
 	"net/http"
 	"os"
 	"strconv"
@@ -21,14 +22,16 @@ func TestOpenAI_Help(t *testing.T) {
 	require.Contains(t, (&OpenAI{}).Help(), "chat!")
 }
 
-func getDefaultConfig() OpenAIParams {
-	return OpenAIParams{
+func getDefaultConfig() Params {
+	return Params{
 		AuthToken:               "ss-mockToken",
-		MaxTokens:               100,
+		MaxTokensResponse:       100,
 		Prompt:                  "",
 		HistorySize:             2,
 		HistoryReplyProbability: 10,
 		EnableAutoResponse:      true,
+		MaxTokensRequest:        3000,
+		MaxSymbolsRequest:       12000,
 	}
 }
 
@@ -43,12 +46,12 @@ func TestOpenAI_OnMessage(t *testing.T) {
 		prompt     string
 		json       []byte
 		mockResult bool
-		response   Response
+		response   bot.Response
 	}{
-		{"Good result", "Prompt", jsonResponse, true, Response{Text: "Mock response", Send: true, ReplyTo: 756}},
-		{"Good result", "", jsonResponse, true, Response{Text: "Mock response", Send: true, ReplyTo: 756}},
-		{"Error result", "", jsonResponse, false, Response{}},
-		{"Empty result", "", []byte(`{}`), true, Response{}},
+		{"Good result", "Prompt", jsonResponse, true, bot.Response{Text: "Mock response", Send: true, ReplyTo: 756}},
+		{"Good result", "", jsonResponse, true, bot.Response{Text: "Mock response", Send: true, ReplyTo: 756}},
+		{"Error result", "", jsonResponse, false, bot.Response{}},
+		{"Empty result", "", []byte(`{}`), true, bot.Response{}},
 	}
 
 	su := &mocks.SuperUser{IsSuperFunc: func(userName string) bool {
@@ -82,7 +85,7 @@ func TestOpenAI_OnMessage(t *testing.T) {
 
 			assert.Equal(t,
 				tt.response,
-				o.OnMessage(Message{Text: fmt.Sprintf("chat! %s", tt.request), ID: 756}),
+				o.OnMessage(bot.Message{Text: fmt.Sprintf("chat! %s", tt.request), ID: 756}),
 			)
 			calls := mockOpenAIClient.CreateChatCompletionCalls()
 			assert.Equal(t, 1, len(calls))
@@ -118,7 +121,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 	o.client = mockOpenAIClient
 
 	{ // first request, allowed
-		resp := o.OnMessage(Message{Text: "chat! something", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "chat! something", ID: 756})
 		require.True(t, resp.Send)
 		assert.Equal(t, "Mock response", resp.Text)
 		assert.Equal(t, 756, resp.ReplyTo)
@@ -126,7 +129,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 	}
 
 	{ // second request, not allowed, too soon
-		resp := o.OnMessage(Message{Text: "chat! something", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "chat! something", ID: 756})
 		require.True(t, resp.Send)
 		assert.Contains(t, resp.Text, "Слишком много запросов,")
 		assert.Equal(t, 756, resp.ReplyTo)
@@ -134,7 +137,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 	}
 
 	{ // third request, allowed from super user
-		req := Message{Text: "chat! something", ID: 756}
+		req := bot.Message{Text: "chat! something", ID: 756}
 		req.From.Username = "super"
 		resp := o.OnMessage(req)
 		require.True(t, resp.Send)
@@ -147,7 +150,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 		o.nowFn = func() time.Time {
 			return time.Now().Add(time.Minute * 31) // 31 min after first request
 		}
-		resp := o.OnMessage(Message{Text: "chat! something", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "chat! something", ID: 756})
 		require.True(t, resp.Send)
 		assert.Equal(t, "Mock response", resp.Text)
 		assert.Equal(t, 756, resp.ReplyTo)
@@ -158,7 +161,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 		o.nowFn = func() time.Time {
 			return time.Now().Add(time.Minute * 162) // 62 min after first request
 		}
-		resp := o.OnMessage(Message{Text: "chat! что такое wtf", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "chat! что такое wtf", ID: 756})
 		require.True(t, resp.Send)
 		assert.Contains(t, resp.Text, "Вы знаете правила")
 		assert.Equal(t, 756, resp.ReplyTo)
@@ -169,7 +172,7 @@ func TestOpenAI_OnMessage_TooManyRequests(t *testing.T) {
 		o.nowFn = func() time.Time {
 			return time.Now().Add(time.Minute * 63) // 63 min after first request
 		}
-		req := Message{Text: "chat! something", ID: 756}
+		req := bot.Message{Text: "chat! something", ID: 756}
 		resp := o.OnMessage(req)
 		require.True(t, resp.Send)
 		assert.Equal(t, "Mock response", resp.Text)
@@ -201,7 +204,7 @@ func TestOpenAI_OnMessage_ResponseWithWTF(t *testing.T) {
 	o.client = mockOpenAIClient
 
 	{ // first request by regular User, banned
-		resp := o.OnMessage(Message{Text: "chat! something", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "chat! something", ID: 756})
 		require.True(t, resp.Send)
 		assert.Contains(t, resp.Text, "выиграл в лотерею")
 		assert.Equal(t, 756, resp.ReplyTo)
@@ -209,7 +212,7 @@ func TestOpenAI_OnMessage_ResponseWithWTF(t *testing.T) {
 	}
 
 	{ // second request, allowed from super user
-		req := Message{Text: "chat! something", ID: 756}
+		req := bot.Message{Text: "chat! something", ID: 756}
 		req.From.Username = "super"
 		resp := o.OnMessage(req)
 		require.True(t, resp.Send)
@@ -245,21 +248,21 @@ func TestOpenAI_OnMessage_RequestWithHistory(t *testing.T) {
 	assert.Equal(t, 0, len(o.history.messages))
 
 	{ // first request, empty answer
-		resp := o.OnMessage(Message{Text: "message 1?", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "message 1?", ID: 756})
 		require.False(t, resp.Send)
 		assert.Equal(t, "", resp.Text)
 		assert.Equal(t, 1, len(o.history.messages))
 	}
 
 	{ // second request, empty answer because not question
-		resp := o.OnMessage(Message{Text: "message 2", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "message 2", ID: 756})
 		require.False(t, resp.Send)
 		assert.Equal(t, "", resp.Text)
 		assert.Equal(t, 2, len(o.history.messages))
 	}
 
 	{ // third request, answered because question
-		resp := o.OnMessage(Message{Text: "message 3?", ID: 756})
+		resp := o.OnMessage(bot.Message{Text: "message 3?", ID: 756})
 		require.True(t, resp.Send)
 		assert.Equal(t, "Mock response", resp.Text)
 		// History request isn't reply to any message
@@ -300,8 +303,8 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory(t *testing.T) {
 	o.rand = func(n int64) int64 { return 1 }
 
 	// History is limited  to 2 messages for easier testing
-	o.history.Add(Message{Text: "message 1", ID: 756})
-	o.history.Add(Message{Text: "message 2", ID: 756})
+	o.history.Add(bot.Message{Text: "message 1", ID: 756})
+	o.history.Add(bot.Message{Text: "message 2", ID: 756})
 
 	tbl := []struct {
 		name     string
@@ -314,7 +317,7 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory(t *testing.T) {
 
 	for _, tt := range tbl {
 		t.Run(tt.name, func(t *testing.T) {
-			result := o.shouldAnswerWithHistory(Message{ID: 2, Text: tt.message})
+			result := o.shouldAnswerWithHistory(bot.Message{ID: 2, Text: tt.message})
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -344,7 +347,7 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory_NotEnoughMessages(t *testing.T
 	o.rand = func(n int64) int64 { return 1 }
 
 	// History is limited  to 2 messages for easier testing
-	o.history.Add(Message{Text: "message 1", ID: 756})
+	o.history.Add(bot.Message{Text: "message 1", ID: 756})
 
 	tbl := []struct {
 		name     string
@@ -357,7 +360,7 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory_NotEnoughMessages(t *testing.T
 
 	for _, tt := range tbl {
 		t.Run(tt.name, func(t *testing.T) {
-			result := o.shouldAnswerWithHistory(Message{ID: 2, Text: tt.message})
+			result := o.shouldAnswerWithHistory(bot.Message{ID: 2, Text: tt.message})
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -385,8 +388,8 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory_Random(t *testing.T) {
 	o.client = mockOpenAIClient
 
 	// History is limited  to 2 messages for easier testing
-	o.history.Add(Message{Text: "message 1", ID: 756})
-	o.history.Add(Message{Text: "message 2", ID: 756})
+	o.history.Add(bot.Message{Text: "message 1", ID: 756})
+	o.history.Add(bot.Message{Text: "message 2", ID: 756})
 
 	tbl := []struct {
 		name       string
@@ -406,7 +409,7 @@ func TestOpenAI_OnMessage_shouldAnswerWithHistory_Random(t *testing.T) {
 			// 99 is always fail the probability check
 			o.rand = func(n int64) int64 { return tt.randResult }
 
-			result := o.shouldAnswerWithHistory(Message{ID: 2, Text: tt.message})
+			result := o.shouldAnswerWithHistory(bot.Message{ID: 2, Text: tt.message})
 			assert.Equal(t, tt.expected, result)
 		})
 	}

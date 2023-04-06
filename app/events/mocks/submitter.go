@@ -17,6 +17,12 @@ import (
 //			SubmitFunc: func(ctx context.Context, text string, pin bool) error {
 //				panic("mock out the Submit method")
 //			},
+//			SubmitHTMLFunc: func(ctx context.Context, text string, pin bool) error {
+//				panic("mock out the SubmitHTML method")
+//			},
+//			WaitMessageQueueFunc: func() error {
+//				panic("mock out the WaitMessageQueue method")
+//			},
 //		}
 //
 //		// use mockedsubmitter in code that requires events.submitter
@@ -26,6 +32,12 @@ import (
 type Submitter struct {
 	// SubmitFunc mocks the Submit method.
 	SubmitFunc func(ctx context.Context, text string, pin bool) error
+
+	// SubmitHTMLFunc mocks the SubmitHTML method.
+	SubmitHTMLFunc func(ctx context.Context, text string, pin bool) error
+
+	// WaitMessageQueueFunc mocks the WaitMessageQueue method.
+	WaitMessageQueueFunc func() error
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -38,8 +50,22 @@ type Submitter struct {
 			// Pin is the pin argument value.
 			Pin bool
 		}
+		// SubmitHTML holds details about calls to the SubmitHTML method.
+		SubmitHTML []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Text is the text argument value.
+			Text string
+			// Pin is the pin argument value.
+			Pin bool
+		}
+		// WaitMessageQueue holds details about calls to the WaitMessageQueue method.
+		WaitMessageQueue []struct {
+		}
 	}
-	lockSubmit sync.RWMutex
+	lockSubmit           sync.RWMutex
+	lockSubmitHTML       sync.RWMutex
+	lockWaitMessageQueue sync.RWMutex
 }
 
 // Submit calls SubmitFunc.
@@ -79,5 +105,72 @@ func (mock *Submitter) SubmitCalls() []struct {
 	mock.lockSubmit.RLock()
 	calls = mock.calls.Submit
 	mock.lockSubmit.RUnlock()
+	return calls
+}
+
+// SubmitHTML calls SubmitHTMLFunc.
+func (mock *Submitter) SubmitHTML(ctx context.Context, text string, pin bool) error {
+	if mock.SubmitHTMLFunc == nil {
+		panic("Submitter.SubmitHTMLFunc: method is nil but submitter.SubmitHTML was just called")
+	}
+	callInfo := struct {
+		Ctx  context.Context
+		Text string
+		Pin  bool
+	}{
+		Ctx:  ctx,
+		Text: text,
+		Pin:  pin,
+	}
+	mock.lockSubmitHTML.Lock()
+	mock.calls.SubmitHTML = append(mock.calls.SubmitHTML, callInfo)
+	mock.lockSubmitHTML.Unlock()
+	return mock.SubmitHTMLFunc(ctx, text, pin)
+}
+
+// SubmitHTMLCalls gets all the calls that were made to SubmitHTML.
+// Check the length with:
+//
+//	len(mockedsubmitter.SubmitHTMLCalls())
+func (mock *Submitter) SubmitHTMLCalls() []struct {
+	Ctx  context.Context
+	Text string
+	Pin  bool
+} {
+	var calls []struct {
+		Ctx  context.Context
+		Text string
+		Pin  bool
+	}
+	mock.lockSubmitHTML.RLock()
+	calls = mock.calls.SubmitHTML
+	mock.lockSubmitHTML.RUnlock()
+	return calls
+}
+
+// WaitMessageQueue calls WaitMessageQueueFunc.
+func (mock *Submitter) WaitMessageQueue() error {
+	if mock.WaitMessageQueueFunc == nil {
+		panic("Submitter.WaitMessageQueueFunc: method is nil but submitter.WaitMessageQueue was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockWaitMessageQueue.Lock()
+	mock.calls.WaitMessageQueue = append(mock.calls.WaitMessageQueue, callInfo)
+	mock.lockWaitMessageQueue.Unlock()
+	return mock.WaitMessageQueueFunc()
+}
+
+// WaitMessageQueueCalls gets all the calls that were made to WaitMessageQueue.
+// Check the length with:
+//
+//	len(mockedsubmitter.WaitMessageQueueCalls())
+func (mock *Submitter) WaitMessageQueueCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockWaitMessageQueue.RLock()
+	calls = mock.calls.WaitMessageQueue
+	mock.lockWaitMessageQueue.RUnlock()
 	return calls
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/radio-t/super-bot/app/bot/openai"
 	"log"
 	"net/http"
 	"os"
@@ -16,7 +17,6 @@ import (
 	"github.com/go-pkgz/requester/middleware/logger"
 	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/jessevdk/go-flags"
-
 	"github.com/radio-t/super-bot/app/bot"
 	"github.com/radio-t/super-bot/app/events"
 	"github.com/radio-t/super-bot/app/reporter"
@@ -44,9 +44,11 @@ var opts struct {
 	ExportBroadcastUsers events.SuperUser `long:"broadcast" description:"broadcast-users"`
 
 	OpenAI struct {
-		AuthToken string `long:"token" env:"AUTH_TOKEN" description:"OpenAI auth token"`
-		MaxTokens int    `long:"max-tokens" env:"MAX_TOKENS" default:"1000" description:"OpenAI max_tokens in response"`
-		Prompt    string `long:"prompt" env:"PROMPT" default:"" description:"OpenAI prompt"`
+		AuthToken         string `long:"token" env:"AUTH_TOKEN" description:"OpenAI auth token"`
+		MaxTokensResponse int    `long:"max-tokens" env:"MAX_TOKENS" default:"1000" description:"OpenAI max_tokens in response"`
+		MaxTokensRequest  int    `long:"max-tokens-request" env:"MAX_TOKENS_REQUEST" default:"3000" description:"OpenAI max tokens in request"`
+		MaxSymbolsRequest int    `long:"max-symbols-request" env:"MAX_SYMBOLS_REQUEST" default:"12000" description:"OpenAI max symbols in request for fallback logic"`
+		Prompt            string `long:"prompt" env:"PROMPT" default:"" description:"OpenAI prompt"`
 
 		EnableAutoResponse      bool `long:"auto-response" env:"AUTO_RESPONSE" description:"enable auto response from OpenAI"`
 		HistorySize             int  `long:"history-size" env:"HISTORY_SIZE" default:"5" description:"OpenAI history size for context answers"`
@@ -89,9 +91,11 @@ func main() {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	// 5 seconds is not enough for OpenAI requests
 	httpClientOpenAI := makeOpenAIHttpClient()
-	openAIBot := bot.NewOpenAI(bot.OpenAIParams{
+	openAIBot := openai.NewOpenAI(openai.Params{
 		AuthToken:               opts.OpenAI.AuthToken,
-		MaxTokens:               opts.OpenAI.MaxTokens,
+		MaxTokensResponse:       opts.OpenAI.MaxTokensResponse,
+		MaxTokensRequest:        opts.OpenAI.MaxTokensRequest,
+		MaxSymbolsRequest:       opts.OpenAI.MaxSymbolsRequest,
 		Prompt:                  opts.OpenAI.Prompt,
 		HistorySize:             opts.OpenAI.HistorySize,
 		HistoryReplyProbability: opts.OpenAI.HistoryReplyProbability,
@@ -164,13 +168,23 @@ func main() {
 		SuperUsers:             opts.SuperUsers,
 	}
 
+	summarizer := openai.NewSummarizer(
+		openAIBot,
+		opts.UreadabilityAPI,
+		opts.UreadabilityToken,
+		httpClient,
+		opts.Dbg,
+	)
+
+	remarkClient := openai.RemarkClient{
+		HTTPClient: httpClient,
+	}
+
 	rtjc := events.Rtjc{
-		Port:          opts.RtjcPort,
-		Submitter:     &tgListener,
-		UrAPI:         opts.UreadabilityAPI,
-		UrToken:       opts.UreadabilityToken,
-		URClient:      httpClient,
-		OpenAISummary: openAIBot,
+		Port:         opts.RtjcPort,
+		Submitter:    &tgListener,
+		Summarizer:   summarizer,
+		RemarkClient: remarkClient,
 	}
 	go rtjc.Listen(ctx)
 

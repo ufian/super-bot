@@ -1,8 +1,8 @@
 package events
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"fmt"
+	"github.com/radio-t/super-bot/app/bot/openai"
 	"strconv"
 	"testing"
 
@@ -34,34 +34,189 @@ func TestRtjc_isPinned(t *testing.T) {
 	}
 }
 
-func TestRtjc_summary(t *testing.T) {
-	oai := &mocks.OpenAISummary{
-		SummaryFunc: func(text string) (string, error) {
+func genRemarkComment(user, text string, score int) openai.RemarkComment {
+	return openai.RemarkComment{
+		ParentID: "0",
+		Text:     text,
+		User: struct {
+			Name     string `json:"name"`
+			Admin    bool   `json:"admin"`
+			Verified bool   `json:"verified,omitempty"`
+		}{Name: user, Admin: false, Verified: true},
+		Score: score,
+	}
+}
+
+func TestRtjc_getSummaryMessages(t *testing.T) {
+	s := &mocks.Summarizer{
+		SummaryFunc: func(link string) (string, error) {
 			return "ai summary", nil
 		},
 	}
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "token123", r.URL.Query().Get("token"))
-		_, err := w.Write([]byte(`{"content": "some content", "title": "some title"}`))
-		require.NoError(t, err)
-	}))
+	rc := &mocks.RemarkClient{
+		GetTopCommentsFunc: func(text string) ([]openai.RemarkComment, error) {
+			return []openai.RemarkComment{
+				genRemarkComment("User1", "some message blah <a href=\"https://example.user1.com\">Link</a>", 2),
+				genRemarkComment("User2", "some message blah <a href=\"https://example.user2.com\">Link</a>", 1),
+			}, nil
+		},
+	}
 
-	rtjc := Rtjc{OpenAISummary: oai, URClient: ts.Client(), UrAPI: ts.URL, UrToken: "token123"}
+	rtjc := Rtjc{Summarizer: s, RemarkClient: rc}
 
 	{
-		title, txt, err := rtjc.summary("some message blah https://example.com")
+		// Test case of regular theme
+		ch, err := rtjc.getSummaryMessages("some message blah https://example.theme.com")
+		assert.NoError(t, err)
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
 		require.NoError(t, err)
-		assert.Equal(t, "ai summary", txt)
-		assert.Equal(t, "some title - some content", oai.SummaryCalls()[0].Text)
-		assert.Equal(t, "some title", title)
+		assert.Equal(t, 1, len(messages))
+		assert.Equal(t, "ai summary", messages[0])
+		assert.Equal(t, 1, len(s.SummaryCalls()))
+		assert.Equal(t, 0, len(rc.GetTopCommentsCalls()))
+		assert.Equal(t, "https://example.theme.com", s.SummaryCalls()[0].Link)
 	}
 
 	{
-		title, txt, err := rtjc.summary("some message blah https://radio-t.com")
+		// Test case of user themes
+		ch, err := rtjc.getSummaryMessages("some message blah https://radio-t.com/p/2023/04/04/prep-853/")
+		assert.NoError(t, err)
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
 		require.NoError(t, err)
-		assert.Equal(t, "", txt)
-		assert.Equal(t, "", title)
+		assert.Equal(t, 2, len(messages))
+		assert.Equal(t, "[1/2] <b>+2</b> от <b>User1</b>\n<i>some message blah <a href=\"https://example.user1.com\">Link</a></i>\n\nai summary", messages[0])
+		assert.Equal(t, "[2/2] <b>+1</b> от <b>User2</b>\n<i>some message blah <a href=\"https://example.user2.com\">Link</a></i>\n\nai summary", messages[1])
+		assert.Equal(t, 3, len(s.SummaryCalls()))
+		assert.Equal(t, "https://example.user1.com", s.SummaryCalls()[1].Link)
+		assert.Equal(t, "https://example.user2.com", s.SummaryCalls()[2].Link)
+		assert.Equal(t, 1, len(rc.GetTopCommentsCalls()))
+		assert.Equal(t, "https://radio-t.com/p/2023/04/04/prep-853/", rc.GetTopCommentsCalls()[0].Link)
+	}
+}
+
+func TestRtjc_getSummaryMessagesErrCases(t *testing.T) {
+	{
+		// Message doesn't have link
+		s := &mocks.Summarizer{
+			SummaryFunc: func(link string) (string, error) {
+				return "ai summary", nil
+			},
+		}
+
+		rc := &mocks.RemarkClient{
+			GetTopCommentsFunc: func(text string) ([]openai.RemarkComment, error) {
+				return []openai.RemarkComment{}, nil
+			},
+		}
+
+		rtjc := Rtjc{Summarizer: s, RemarkClient: rc}
+
+		// Test case of regular theme
+		ch, err := rtjc.getSummaryMessages("some message blah")
+		require.Error(t, err)
+
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
+		assert.Equal(t, 0, len(messages))
+		assert.Equal(t, 0, len(s.SummaryCalls()))
+		assert.Equal(t, 0, len(rc.GetTopCommentsCalls()))
+	}
+
+	{
+		// Summarizer failed
+		s := &mocks.Summarizer{
+			SummaryFunc: func(link string) (string, error) {
+				return "", fmt.Errorf("some error")
+			},
+		}
+
+		rc := &mocks.RemarkClient{
+			GetTopCommentsFunc: func(text string) ([]openai.RemarkComment, error) {
+				return []openai.RemarkComment{}, nil
+			},
+		}
+
+		rtjc := Rtjc{Summarizer: s, RemarkClient: rc}
+
+		// Test case of regular theme
+		ch, err := rtjc.getSummaryMessages("some message blah https://example.theme.com")
+		require.Error(t, err)
+
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
+		assert.Equal(t, 0, len(messages))
+		assert.Equal(t, 1, len(s.SummaryCalls()))
+		assert.Equal(t, "https://example.theme.com", s.SummaryCalls()[0].Link)
+		assert.Equal(t, 0, len(rc.GetTopCommentsCalls()))
+	}
+
+	{
+		// Bad radio-t link to user themes
+		s := &mocks.Summarizer{
+			SummaryFunc: func(link string) (string, error) {
+				return "ai summary", nil
+			},
+		}
+
+		rc := &mocks.RemarkClient{
+			GetTopCommentsFunc: func(text string) ([]openai.RemarkComment, error) {
+				return []openai.RemarkComment{}, nil
+			},
+		}
+
+		rtjc := Rtjc{Summarizer: s, RemarkClient: rc}
+
+		// Test case of regular theme
+		ch, err := rtjc.getSummaryMessages("some message blah https://radio-t.com/about/")
+		require.Error(t, err)
+
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
+		assert.Equal(t, 0, len(messages))
+		assert.Equal(t, 0, len(s.SummaryCalls()))
+		assert.Equal(t, 0, len(rc.GetTopCommentsCalls()))
+	}
+
+	{
+		// Failure of RemarkClient.GetTopComments
+		s := &mocks.Summarizer{
+			SummaryFunc: func(link string) (string, error) {
+				return "ai summary", nil
+			},
+		}
+
+		rc := &mocks.RemarkClient{
+			GetTopCommentsFunc: func(text string) ([]openai.RemarkComment, error) {
+				return []openai.RemarkComment{}, fmt.Errorf("some error")
+			},
+		}
+
+		rtjc := Rtjc{Summarizer: s, RemarkClient: rc}
+
+		// Test case of regular theme
+		ch, err := rtjc.getSummaryMessages("some message blah https://radio-t.com/p/2023/04/04/prep-853/")
+		require.Error(t, err)
+
+		messages := make([]string, 0)
+		for message := range ch {
+			messages = append(messages, message)
+		}
+		assert.Equal(t, 0, len(messages))
+		assert.Equal(t, 0, len(s.SummaryCalls()))
+		assert.Equal(t, 1, len(rc.GetTopCommentsCalls()))
+		assert.Equal(t, "https://radio-t.com/p/2023/04/04/prep-853/", rc.GetTopCommentsCalls()[0].Link)
 	}
 }

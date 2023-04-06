@@ -7,61 +7,61 @@ import (
 	"sync"
 )
 
-// OpenAISummary is a mock implementation of events.openAISummary.
+// Summarizer is a mock implementation of events.summarizer.
 //
-//	func TestSomethingThatUsesopenAISummary(t *testing.T) {
+//	func TestSomethingThatUsessummarizer(t *testing.T) {
 //
-//		// make and configure a mocked events.openAISummary
-//		mockedopenAISummary := &OpenAISummary{
-//			SummaryFunc: func(text string) (string, error) {
+//		// make and configure a mocked events.summarizer
+//		mockedsummarizer := &Summarizer{
+//			SummaryFunc: func(link string) (string, error) {
 //				panic("mock out the Summary method")
 //			},
 //		}
 //
-//		// use mockedopenAISummary in code that requires events.openAISummary
+//		// use mockedsummarizer in code that requires events.summarizer
 //		// and then make assertions.
 //
 //	}
-type OpenAISummary struct {
+type Summarizer struct {
 	// SummaryFunc mocks the Summary method.
-	SummaryFunc func(text string) (string, error)
+	SummaryFunc func(link string) (string, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
 		// Summary holds details about calls to the Summary method.
 		Summary []struct {
-			// Text is the text argument value.
-			Text string
+			// Link is the link argument value.
+			Link string
 		}
 	}
 	lockSummary sync.RWMutex
 }
 
 // Summary calls SummaryFunc.
-func (mock *OpenAISummary) Summary(text string) (string, error) {
+func (mock *Summarizer) Summary(link string) (string, error) {
 	if mock.SummaryFunc == nil {
-		panic("OpenAISummary.SummaryFunc: method is nil but openAISummary.Summary was just called")
+		panic("Summarizer.SummaryFunc: method is nil but summarizer.Summary was just called")
 	}
 	callInfo := struct {
-		Text string
+		Link string
 	}{
-		Text: text,
+		Link: link,
 	}
 	mock.lockSummary.Lock()
 	mock.calls.Summary = append(mock.calls.Summary, callInfo)
 	mock.lockSummary.Unlock()
-	return mock.SummaryFunc(text)
+	return mock.SummaryFunc(link)
 }
 
 // SummaryCalls gets all the calls that were made to Summary.
 // Check the length with:
 //
-//	len(mockedopenAISummary.SummaryCalls())
-func (mock *OpenAISummary) SummaryCalls() []struct {
-	Text string
+//	len(mockedsummarizer.SummaryCalls())
+func (mock *Summarizer) SummaryCalls() []struct {
+	Link string
 } {
 	var calls []struct {
-		Text string
+		Link string
 	}
 	mock.lockSummary.RLock()
 	calls = mock.calls.Summary
